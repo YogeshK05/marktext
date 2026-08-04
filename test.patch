@@ -1,0 +1,327 @@
+diff --git a/packages/desktop/test/e2e/helpers.ts b/packages/desktop/test/e2e/helpers.ts
+index 9f749be1..606f05a0 100644
+--- a/packages/desktop/test/e2e/helpers.ts
++++ b/packages/desktop/test/e2e/helpers.ts
+@@ -234,10 +234,27 @@ export const exitSourceMode = async(page: Page, app: ElectronApplication): Promi
+   })
+ }
+ 
+-export const getMarkdownContent = async(
+-  page: Page,
+-  app: ElectronApplication
+-): Promise<string> => {
++export const enterSplitMode = async(page: Page, app: ElectronApplication): Promise<void> => {
++  const already = await page.evaluate(() => !!document.querySelector('.split-view'))
++  if (already) return
++  await clickMenuById(app, 'splitViewModeMenuItem')
++  await page.waitForSelector('.split-view', { state: 'attached', timeout: 10000 })
++  await page.waitForSelector('.split-view .source-code .CodeMirror', {
++    state: 'attached',
++    timeout: 10000
++  })
++}
++
++export const exitSplitMode = async(page: Page, app: ElectronApplication): Promise<void> => {
++  const inSplit = await page.evaluate(() => !!document.querySelector('.split-view'))
++  if (!inSplit) return
++  await clickMenuById(app, 'splitViewModeMenuItem')
++  await page.waitForFunction(() => !document.querySelector('.split-view'), null, {
++    timeout: 10000
++  })
++}
++
++export const getMarkdownContent = async(page: Page, app: ElectronApplication): Promise<string> => {
+   const wasInSource = await page.evaluate(
+     () => !!document.querySelector('.source-code .CodeMirror')
+   )
+diff --git a/packages/desktop/test/e2e/menu-sanity.spec.ts b/packages/desktop/test/e2e/menu-sanity.spec.ts
+index f5bf0318..d14a3593 100644
+--- a/packages/desktop/test/e2e/menu-sanity.spec.ts
++++ b/packages/desktop/test/e2e/menu-sanity.spec.ts
+@@ -46,6 +46,7 @@ test.describe('Application menu wiring', () => {
+       'subscriptMenuItem',
+       'inlineMathMenuItem',
+       'sourceCodeModeMenuItem',
++      'splitViewModeMenuItem',
+       'typewriterModeMenuItem',
+       'focusModeMenuItem',
+       'sideBarMenuItem',
+diff --git a/packages/desktop/test/e2e/view-modes.spec.ts b/packages/desktop/test/e2e/view-modes.spec.ts
+index 79d3d6b3..147f3310 100644
+--- a/packages/desktop/test/e2e/view-modes.spec.ts
++++ b/packages/desktop/test/e2e/view-modes.spec.ts
+@@ -4,7 +4,10 @@ import {
+   launchWithMarkdown,
+   clickMenuById,
+   enterSourceMode,
+-  exitSourceMode
++  exitSourceMode,
++  enterSplitMode,
++  exitSplitMode,
++  sendIpcToRenderer
+ } from './helpers'
+ 
+ // Read the live `checked`/`enabled` state of a view-mode menu item straight
+@@ -107,6 +110,71 @@ test.describe('View modes', () => {
+     })
+   })
+ 
++  test('Toggle Split View mode shows source+preview and exits cleanly', async() => {
++    await enterSplitMode(page, app)
++    await expect(page.locator('.split-view')).toBeVisible()
++    await expect(page.locator('.split-view .source-code .CodeMirror')).toBeVisible()
++    await expect(page.locator('.split-view .split-preview')).toBeVisible()
++
++    await exitSplitMode(page, app)
++    await expect(page.locator('.split-view')).toHaveCount(0)
++  })
++
++  test('Split View preview reflects source edits after debounce and is read-only', async() => {
++    await enterSplitMode(page, app)
++    try {
++      const token = `split-preview-token-${Date.now()}`
++      await page.click('.split-view .source-code .CodeMirror')
++      await page.keyboard.type(`\n\n**${token}**`, { delay: 0 })
++
++      await expect
++        .poll(
++          () =>
++            page.evaluate(() => {
++              const el = document.querySelector(
++                '.split-preview .split-preview-content'
++              ) as HTMLElement | null
++              return el?.innerHTML ?? ''
++            }),
++          { timeout: 5000 }
++        )
++        .toContain(`<strong>${token}</strong>`)
++
++      const previewIsEditable = await page.evaluate(() => {
++        const el = document.querySelector(
++          '.split-preview .split-preview-content'
++        ) as HTMLElement | null
++        return !!el?.isContentEditable
++      })
++      expect(previewIsEditable).toBe(false)
++
++      const markdownBefore = await page.evaluate(() => {
++        const cm = document.querySelector('.split-view .source-code .CodeMirror') as
++          | (Element & { CodeMirror?: { getValue(): string } })
++          | null
++        return cm?.CodeMirror?.getValue() ?? ''
++      })
++
++      await page.click('.split-view .split-preview .split-preview-content')
++      await page.keyboard.type('preview-should-not-edit')
++
++      await expect
++        .poll(
++          () =>
++            page.evaluate(() => {
++              const cm = document.querySelector('.split-view .source-code .CodeMirror') as
++                | (Element & { CodeMirror?: { getValue(): string } })
++                | null
++              return cm?.CodeMirror?.getValue() ?? ''
++            }),
++          { timeout: 1500 }
++        )
++        .toBe(markdownBefore)
++    } finally {
++      await exitSplitMode(page, app)
++    }
++  })
++
+   // Item 155 — In source-code mode the Typewriter and Focus menu items are
+   // disabled (editing modes don't apply to the CodeMirror surface), and become
+   // enabled again on exit. `viewLayoutChanged`'s `sourceCode` branch toggles
+@@ -130,10 +198,32 @@ test.describe('View modes', () => {
+     expect((await waitForEnabled(app, 'focusModeMenuItem', true)).enabled).toBe(true)
+   })
+ 
++  test('Split View disables Typewriter + Focus menu items, exit re-enables', async() => {
++    expect((await waitForEnabled(app, 'typewriterModeMenuItem', true)).enabled).toBe(true)
++    expect((await waitForEnabled(app, 'focusModeMenuItem', true)).enabled).toBe(true)
++
++    await enterSplitMode(page, app)
++
++    expect((await waitForEnabled(app, 'typewriterModeMenuItem', false)).enabled).toBe(false)
++    expect((await waitForEnabled(app, 'focusModeMenuItem', false)).enabled).toBe(false)
++
++    await exitSplitMode(page, app)
++
++    expect((await waitForEnabled(app, 'typewriterModeMenuItem', true)).enabled).toBe(true)
++    expect((await waitForEnabled(app, 'focusModeMenuItem', true)).enabled).toBe(true)
++  })
++
+   // Item 265 — The three view-mode menu items are checkboxes whose `checked`
+   // state must flip with each toggle. view-modes' other tests only assert the
+   // `.editor-wrapper` class; menu-sanity only asserts the ids EXIST.
+   test('Item 265: view-mode menu items track their checked state on toggle', async() => {
++    // Split-view mode checkbox.
++    expect((await viewModeMenuItem(app, 'splitViewModeMenuItem'))?.checked).toBe(false)
++    await enterSplitMode(page, app)
++    expect((await waitForChecked(app, 'splitViewModeMenuItem', true)).checked).toBe(true)
++    await exitSplitMode(page, app)
++    expect((await waitForChecked(app, 'splitViewModeMenuItem', false)).checked).toBe(false)
++
+     // Source-code mode checkbox.
+     expect((await viewModeMenuItem(app, 'sourceCodeModeMenuItem'))?.checked).toBe(false)
+     await enterSourceMode(page, app)
+@@ -157,6 +247,42 @@ test.describe('View modes', () => {
+   })
+ })
+ 
++test.describe('View modes — Split View lifecycle', () => {
++  test('Split View stays active when opening/switching documents in the same window', async() => {
++    const launched = await launchWithMarkdown('# Split lifecycle\n\nBody\n')
++    const app = launched.app
++    const page = launched.page
++
++    try {
++      await enterSplitMode(page, app)
++      await sendIpcToRenderer(app, 'mt::new-untitled-tab', true, '# New tab\n')
++
++      await expect(page.locator('.split-view')).toBeVisible()
++      expect((await waitForChecked(app, 'splitViewModeMenuItem', true)).checked).toBe(true)
++    } finally {
++      await app.close()
++    }
++  })
++
++  test('Split View does not persist across app restart', async() => {
++    const first = await launchWithMarkdown('# Split restart\n\nBody\n')
++    try {
++      await enterSplitMode(first.page, first.app)
++      expect((await waitForChecked(first.app, 'splitViewModeMenuItem', true)).checked).toBe(true)
++    } finally {
++      await first.app.close()
++    }
++
++    const second = await launchWithMarkdown('# Split restart\n\nBody\n')
++    try {
++      await expect(second.page.locator('.split-view')).toHaveCount(0)
++      expect((await waitForChecked(second.app, 'splitViewModeMenuItem', false)).checked).toBe(false)
++    } finally {
++      await second.app.close()
++    }
++  })
++})
++
+ // Click into a top-level block the way parity-pg1-menu-state.spec.ts:41 does —
+ // a real bubbling click on the content span drives Muya's selection handling,
+ // which flips the `.mu-active` ancestor-chain class that focus mode keys off.
+diff --git a/packages/desktop/test/unit/specs/preferences-view-modes.spec.ts b/packages/desktop/test/unit/specs/preferences-view-modes.spec.ts
+new file mode 100644
+index 00000000..d8042701
+--- /dev/null
++++ b/packages/desktop/test/unit/specs/preferences-view-modes.spec.ts
+@@ -0,0 +1,42 @@
++import { beforeEach, describe, expect, it } from 'vitest'
++import { createPinia, setActivePinia } from 'pinia'
++import { usePreferencesStore } from '@/store/preferences'
++
++describe('preferences view-mode toggles', () => {
++  beforeEach(() => {
++    setActivePinia(createPinia())
++  })
++
++  it('enabling split view disables source-code mode', () => {
++    const store = usePreferencesStore()
++    store.SET_MODE({ type: 'sourceCode', checked: true })
++
++    const changes = store.TOGGLE_VIEW_MODE('splitView')
++
++    expect(store.splitView).toBe(true)
++    expect(store.sourceCode).toBe(false)
++    expect(changes).toEqual({ splitView: true, sourceCode: false })
++  })
++
++  it('enabling source-code mode disables split view', () => {
++    const store = usePreferencesStore()
++    store.SET_MODE({ type: 'splitView', checked: true })
++
++    const changes = store.TOGGLE_VIEW_MODE('sourceCode')
++
++    expect(store.sourceCode).toBe(true)
++    expect(store.splitView).toBe(false)
++    expect(changes).toEqual({ sourceCode: true, splitView: false })
++  })
++
++  it('can disable split view without changing source-code mode', () => {
++    const store = usePreferencesStore()
++    store.SET_MODE({ type: 'splitView', checked: true })
++
++    const changes = store.TOGGLE_VIEW_MODE('splitView')
++
++    expect(store.splitView).toBe(false)
++    expect(store.sourceCode).toBe(false)
++    expect(changes).toEqual({ splitView: false })
++  })
++})
+diff --git a/test.sh b/test.sh
+new file mode 100644
+index 00000000..f0772406
+--- /dev/null
++++ b/test.sh
+@@ -0,0 +1,61 @@
++#!/usr/bin/env bash
++set -uo pipefail
++cd /app/packages/desktop
++
++OUTPUT_PATH=""
++if [ "${1:-}" = "--output_path" ]; then
++  OUTPUT_PATH="$2"; shift 2
++fi
++MODE="${1:-new}"
++
++UNIT_OUT="/tmp/unit-results.xml"
++E2E_OUT="/tmp/e2e-results.xml"
++
++
++SPLIT_VIEW_GREP="Split View"
++
++case "$MODE" in
++  base)
++    # Existing unit regression suite, minus the new spec file.
++    npx vitest run test/unit \
++      --exclude "**/preferences-view-modes.spec.ts" \
++      --reporter=junit --outputFile="$UNIT_OUT"
++
++    # Existing e2e regression suite:
++    #  - skip the fully-new view-modes.spec.ts entirely
++    #  - within menu-sanity.spec.ts, run everything EXCEPT the new
++    #    Split-View assertions (old behavior must still pass unchanged)
++    npx playwright test test/e2e \
++      --ignore-snapshots \
++      --grep-invert "$SPLIT_VIEW_GREP" \
++      --testIgnore="**/view-modes.spec.ts" \
++      --reporter=junit
++    cp test-results/junit.xml "$E2E_OUT" 2>/dev/null || true
++    ;;
++  new)
++    # Only the fully-new unit spec.
++    npx vitest run test/unit/specs/preferences-view-modes.spec.ts \
++      --reporter=junit --outputFile="$UNIT_OUT"
++
++    # The fully-new e2e spec, plus the new Split-View assertions inside
++    # the otherwise-existing menu-sanity.spec.ts.
++    npx playwright test test/e2e/view-modes.spec.ts \
++      --grep "$SPLIT_VIEW_GREP" \
++      --reporter=junit
++    cp test-results/junit.xml "$E2E_OUT" 2>/dev/null || true
++    ;;
++esac
++
++# Merge the two JUnit XML outputs into one file at $OUTPUT_PATH.
++node -e "
++const fs = require('fs');
++function suites(path) {
++  if (!fs.existsSync(path)) return '';
++  const xml = fs.readFileSync(path, 'utf8');
++  const m = xml.match(/<testsuites[^>]*>([\s\S]*)<\/testsuites>/);
++  return m ? m[1] : xml.replace(/<\?xml[^>]*\?>/, '');
++}
++const merged = '<?xml version=\"1.0\" encoding=\"UTF-8\"?><testsuites>'
++  + suites('$UNIT_OUT') + suites('$E2E_OUT') + '</testsuites>';
++fs.writeFileSync('$OUTPUT_PATH', merged);
++"

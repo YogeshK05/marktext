@@ -1,0 +1,695 @@
+diff --git a/packages/desktop/src/common/commands/constants.ts b/packages/desktop/src/common/commands/constants.ts
+index 2a1d7cf8..a320d487 100644
+--- a/packages/desktop/src/common/commands/constants.ts
++++ b/packages/desktop/src/common/commands/constants.ts
+@@ -94,6 +94,7 @@ const COMMANDS = Object.freeze({
+   VIEW_DEV_RELOAD: 'view.dev-reload',
+   VIEW_FOCUS_MODE: 'view.focus-mode',
+   VIEW_FORCE_RELOAD_IMAGES: 'view.reload-images',
++  VIEW_SPLIT_MODE: 'view.split-mode',
+   VIEW_SOURCE_CODE_MODE: 'view.source-code-mode',
+   VIEW_TOGGLE_DEV_TOOLS: 'view.toggle-dev-tools',
+   VIEW_TOGGLE_SIDEBAR: 'view.toggle-sidebar',
+diff --git a/packages/desktop/src/main/keyboard/keybindingsDarwin.ts b/packages/desktop/src/main/keyboard/keybindingsDarwin.ts
+index 96f742d6..f955f826 100644
+--- a/packages/desktop/src/main/keyboard/keybindingsDarwin.ts
++++ b/packages/desktop/src/main/keyboard/keybindingsDarwin.ts
+@@ -91,6 +91,7 @@ const keybindings: Map<string, string> = new Map([
+ 
+   // View menu
+   ['view.command-palette', 'Command+Shift+P'],
++  ['view.split-mode', ''],
+   ['view.source-code-mode', 'Command+Option+S'],
+   ['view.typewriter-mode', 'Command+Option+T'],
+   ['view.focus-mode', 'Command+Shift+J'],
+diff --git a/packages/desktop/src/main/keyboard/keybindingsLinux.ts b/packages/desktop/src/main/keyboard/keybindingsLinux.ts
+index 65ac2308..8cea9a41 100644
+--- a/packages/desktop/src/main/keyboard/keybindingsLinux.ts
++++ b/packages/desktop/src/main/keyboard/keybindingsLinux.ts
+@@ -95,6 +95,7 @@ const keybindings: Map<string, string> = new Map([
+ 
+   // View menu
+   ['view.command-palette', 'Ctrl+Shift+P'],
++  ['view.split-mode', ''],
+   ['view.source-code-mode', 'Ctrl+E'],
+   ['view.typewriter-mode', 'Ctrl+Shift+G'],
+   ['view.focus-mode', 'Ctrl+Shift+J'],
+diff --git a/packages/desktop/src/main/keyboard/keybindingsWindows.ts b/packages/desktop/src/main/keyboard/keybindingsWindows.ts
+index 9654b64c..28d60178 100644
+--- a/packages/desktop/src/main/keyboard/keybindingsWindows.ts
++++ b/packages/desktop/src/main/keyboard/keybindingsWindows.ts
+@@ -94,6 +94,7 @@ const keybindings: Map<string, string> = new Map([
+ 
+   // View menu
+   ['view.command-palette', 'Ctrl+Shift+P'],
++  ['view.split-mode', ''],
+   ['view.source-code-mode', 'Ctrl+E'],
+   ['view.typewriter-mode', 'Ctrl+Shift+G'],
+   ['view.focus-mode', 'Ctrl+Shift+J'],
+diff --git a/packages/desktop/src/main/menu/actions/view.ts b/packages/desktop/src/main/menu/actions/view.ts
+index 0b369d9d..2e5e52e6 100644
+--- a/packages/desktop/src/main/menu/actions/view.ts
++++ b/packages/desktop/src/main/menu/actions/view.ts
+@@ -6,6 +6,8 @@ type Win = BrowserWindow | null | undefined
+ 
+ const typewriterModeMenuItemId = 'typewriterModeMenuItem'
+ const focusModeMenuItemId = 'focusModeMenuItem'
++const sourceCodeModeMenuItemId = 'sourceCodeModeMenuItem'
++const splitViewModeMenuItemId = 'splitViewModeMenuItem'
+ 
+ const toggleTypeMode = (win: Win, type: string): void => {
+   if (win && win.webContents) {
+@@ -51,6 +53,10 @@ export const toggleSourceCodeMode = (win: Win): void => {
+   toggleTypeMode(win, 'sourceCode')
+ }
+ 
++export const toggleSplitViewMode = (win: Win): void => {
++  toggleTypeMode(win, 'splitView')
++}
++
+ export const toggleSidebar = (win: Win): void => {
+   toggleLayout(win, 'showSideBar')
+ }
+@@ -83,6 +89,7 @@ export const loadViewCommands = (commandManager: CommandManager): void => {
+   commandManager.add(COMMANDS.VIEW_COMMAND_PALETTE, showCommandPalette)
+   commandManager.add(COMMANDS.VIEW_FOCUS_MODE, toggleFocusMode)
+   commandManager.add(COMMANDS.VIEW_FORCE_RELOAD_IMAGES, reloadImageCache)
++  commandManager.add(COMMANDS.VIEW_SPLIT_MODE, toggleSplitViewMode)
+   commandManager.add(COMMANDS.VIEW_SOURCE_CODE_MODE, toggleSourceCodeMode)
+   commandManager.add(COMMANDS.VIEW_TOGGLE_SIDEBAR, toggleSidebar)
+   commandManager.add(COMMANDS.VIEW_TOGGLE_TABBAR, toggleTabBar)
+@@ -115,6 +122,9 @@ export const viewLayoutChanged = (
+     menuItem.checked = !!value
+   }
+ 
++  let sourceCodeChecked = !!applicationMenu.getMenuItemById(sourceCodeModeMenuItemId)?.checked
++  let splitViewChecked = !!applicationMenu.getMenuItemById(splitViewModeMenuItemId)?.checked
++
+   for (const key in changes) {
+     const value = changes[key]
+     switch (key) {
+@@ -125,9 +135,12 @@ export const viewLayoutChanged = (
+         changeMenuByName('tabBarMenuItem', value)
+         break
+       case 'sourceCode':
+-        changeMenuByName('sourceCodeModeMenuItem', !!value)
+-        disableMenuByName(focusModeMenuItemId, !value)
+-        disableMenuByName(typewriterModeMenuItemId, !value)
++        sourceCodeChecked = !!value
++        changeMenuByName(sourceCodeModeMenuItemId, !!value)
++        break
++      case 'splitView':
++        splitViewChecked = !!value
++        changeMenuByName(splitViewModeMenuItemId, !!value)
+         break
+       case 'typewriter':
+         changeMenuByName(typewriterModeMenuItemId, value)
+@@ -137,4 +150,8 @@ export const viewLayoutChanged = (
+         break
+     }
+   }
++
++  const shouldDisableEditingModes = sourceCodeChecked || splitViewChecked
++  disableMenuByName(focusModeMenuItemId, !shouldDisableEditingModes)
++  disableMenuByName(typewriterModeMenuItemId, !shouldDisableEditingModes)
+ }
+diff --git a/packages/desktop/src/main/menu/templates/view.ts b/packages/desktop/src/main/menu/templates/view.ts
+index 498c0913..e628ca9b 100755
+--- a/packages/desktop/src/main/menu/templates/view.ts
++++ b/packages/desktop/src/main/menu/templates/view.ts
+@@ -25,6 +25,16 @@ export default function(keybindings: Keybindings): MenuItemConstructorOptions {
+         actions.toggleSourceCodeMode(focusedWindow as BrowserWindow | undefined)
+       }
+     },
++    {
++      id: 'splitViewModeMenuItem',
++      label: t('menu.view.splitViewMode'),
++      accelerator: keybindings.getAccelerator('view.split-mode') ?? undefined,
++      type: 'checkbox',
++      checked: false,
++      click(_item, focusedWindow) {
++        actions.toggleSplitViewMode(focusedWindow as BrowserWindow | undefined)
++      }
++    },
+     {
+       id: 'typewriterModeMenuItem',
+       label: t('menu.view.typewriterMode'),
+diff --git a/packages/desktop/src/renderer/src/commands/descriptions.ts b/packages/desktop/src/renderer/src/commands/descriptions.ts
+index 4e5c7a08..4d6b1b8d 100644
+--- a/packages/desktop/src/renderer/src/commands/descriptions.ts
++++ b/packages/desktop/src/renderer/src/commands/descriptions.ts
+@@ -165,6 +165,8 @@ const COMMAND_KEY_MAP: Record<string, string> = {
+   'view.toggle-toc': 'commands.view.toggleToc',
+ 
+   // Edit modes
++  'view.toggle-split-mode': 'commands.view.toggleSplitViewMode',
++  'view.split-mode': 'commands.view.splitViewMode',
+   'view.toggle-source-code-mode': 'commands.view.toggleSourceCodeMode',
+   'view.source-code-mode': 'commands.view.sourceCodeMode',
+   'view.toggle-typewriter-mode': 'commands.view.toggleTypewriterMode',
+diff --git a/packages/desktop/src/renderer/src/commands/index.ts b/packages/desktop/src/renderer/src/commands/index.ts
+index 2528d60b..5e2ec5cd 100644
+--- a/packages/desktop/src/renderer/src/commands/index.ts
++++ b/packages/desktop/src/renderer/src/commands/index.ts
+@@ -581,6 +581,12 @@ const commands: CommandDescriptor[] = [
+   // --------------------------------------------------------------------------
+   // View
+ 
++  {
++    id: 'view.split-mode',
++    execute: async() => {
++      bus.emit('view:toggle-view-entry', 'splitView')
++    }
++  },
+   {
+     id: 'view.source-code-mode',
+     execute: async() => {
+@@ -649,17 +655,13 @@ const commands: CommandDescriptor[] = [
+   {
+     id: 'docs.user-guide',
+     execute: async() => {
+-      window.electron.shell.openExternal(
+-        'https://marktext.me/docs/basics'
+-      )
++      window.electron.shell.openExternal('https://marktext.me/docs/basics')
+     }
+   },
+   {
+     id: 'docs.markdown-syntax',
+     execute: async() => {
+-      window.electron.shell.openExternal(
+-        'https://marktext.me/docs/markdown-syntax'
+-      )
++      window.electron.shell.openExternal('https://marktext.me/docs/markdown-syntax')
+     }
+   },
+ 
+diff --git a/packages/desktop/src/renderer/src/components/editorWithTabs/editor.vue b/packages/desktop/src/renderer/src/components/editorWithTabs/editor.vue
+index 6d2999ba..b4df58b6 100644
+--- a/packages/desktop/src/renderer/src/components/editorWithTabs/editor.vue
++++ b/packages/desktop/src/renderer/src/components/editorWithTabs/editor.vue
+@@ -1,7 +1,7 @@
+ <template>
+   <div
+     class="editor-wrapper"
+-    :class="[{ typewriter: typewriter, focus: focus, source: sourceCode }]"
++    :class="[{ typewriter: typewriter, focus: focus, source: sourceCode || splitView }]"
+     :dir="textDirection"
+   >
+     <div
+@@ -72,7 +72,7 @@
+         </div>
+       </template>
+     </el-dialog>
+-    <editor-search v-if="!sourceCode" />
++    <editor-search v-if="!sourceCode && !splitView" />
+   </div>
+ </template>
+ 
+@@ -249,7 +249,8 @@ const {
+   // Edit modes
+   typewriter,
+   focus,
+-  sourceCode
++  sourceCode,
++  splitView
+ } = storeToRefs(preferencesStore)
+ 
+ // Editor store refs
+@@ -550,7 +551,8 @@ watch(focus, (value) => {
+ // WYSIWYG engine, so grey them out. On return to WYSIWYG, re-apply the menu
+ // state for the CURRENT cursor context (a code block/table still disables some
+ // items) rather than blanket-enabling everything (#3531).
+-watch(sourceCode, (isSource) => {
++watch([sourceCode, splitView], ([isSourceCode, isSplitView]) => {
++  const isSource = isSourceCode || isSplitView
+   const windowId = window.marktext?.env?.windowId ?? -1
+   if (isSource) {
+     window.electron.ipcRenderer.send('mt::set-editor-format-menus-enabled', windowId, false)
+@@ -1063,7 +1065,7 @@ const replaceMisspelling = (payload: unknown) => {
+ }
+ 
+ const handleUndo = () => {
+-  if (sourceCode.value) {
++  if (sourceCode.value || splitView.value) {
+     return
+   }
+ 
+@@ -1073,7 +1075,7 @@ const handleUndo = () => {
+ }
+ 
+ const handleRedo = () => {
+-  if (sourceCode.value) {
++  if (sourceCode.value || splitView.value) {
+     return
+   }
+ 
+@@ -1083,7 +1085,7 @@ const handleRedo = () => {
+ }
+ 
+ const handleSelectAll = () => {
+-  if (sourceCode.value) {
++  if (sourceCode.value || splitView.value) {
+     return
+   }
+ 
+@@ -1118,7 +1120,7 @@ const handleCopyPaste = (type: unknown) => {
+ }
+ 
+ const insertImage = (src: unknown) => {
+-  if (!sourceCode.value) {
++  if (!sourceCode.value && !splitView.value) {
+     editor.value && editor.value.insertImage({ src })
+   }
+ }
+@@ -1393,7 +1395,7 @@ const handleEditParagraph = (type: unknown) => {
+   // These commands act on the hidden WYSIWYG engine, so block them in
+   // source-code mode (mirrors handleUndo/handleSelectAll) — otherwise e.g. the
+   // Insert Table wizard opens and writes to the invisible editor (#3531).
+-  if (sourceCode.value) {
++  if (sourceCode.value || splitView.value) {
+     return
+   }
+   if (type === 'table') {
+@@ -1416,7 +1418,7 @@ const handleEditParagraph = (type: unknown) => {
+ 
+ // handle `duplicate`, `delete`, `create paragraph below`
+ const handleParagraph = (type: unknown) => {
+-  if (sourceCode.value) {
++  if (sourceCode.value || splitView.value) {
+     return
+   }
+   if (editor.value) {
+@@ -1437,7 +1439,7 @@ const handleParagraph = (type: unknown) => {
+ }
+ 
+ const handleInlineFormat = (type: unknown) => {
+-  if (sourceCode.value) {
++  if (sourceCode.value || splitView.value) {
+     return
+   }
+   editor.value && editor.value.format(type)
+diff --git a/packages/desktop/src/renderer/src/components/editorWithTabs/index.vue b/packages/desktop/src/renderer/src/components/editorWithTabs/index.vue
+index 3bd465eb..1a947152 100644
+--- a/packages/desktop/src/renderer/src/components/editorWithTabs/index.vue
++++ b/packages/desktop/src/renderer/src/components/editorWithTabs/index.vue
+@@ -11,8 +11,14 @@
+         :text-direction="textDirection"
+         :platform="platform"
+       />
++      <split-view
++        v-if="splitView"
++        :markdown="markdown"
++        :muya-index-cursor="muyaIndexCursor"
++        :text-direction="textDirection"
++      />
+       <source-code
+-        v-if="sourceCode"
++        v-if="sourceCode && !splitView"
+         :markdown="markdown"
+         :muya-index-cursor="muyaIndexCursor"
+         :text-direction="textDirection"
+@@ -27,6 +33,7 @@ import { useLayoutStore } from '@/store/layout'
+ import { storeToRefs } from 'pinia'
+ import Tabs from './tabs.vue'
+ import Editor from './editor.vue'
++import SplitView from './splitView.vue'
+ import SourceCode from './sourceCode.vue'
+ import TabNotifications from './notifications.vue'
+ 
+@@ -38,6 +45,7 @@ defineProps<{
+   cursor: unknown
+   muyaIndexCursor?: unknown
+   sourceCode: boolean
++  splitView: boolean
+   showTabBar: boolean
+   textDirection: string
+   platform: string
+diff --git a/packages/desktop/src/renderer/src/components/editorWithTabs/sourceCode.vue b/packages/desktop/src/renderer/src/components/editorWithTabs/sourceCode.vue
+index c685c339..d41955a5 100644
+--- a/packages/desktop/src/renderer/src/components/editorWithTabs/sourceCode.vue
++++ b/packages/desktop/src/renderer/src/components/editorWithTabs/sourceCode.vue
+@@ -43,7 +43,7 @@ const commitTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+ const viewDestroyed = ref(false)
+ const tabId = ref<string | null>(null)
+ 
+-const { theme, sourceCode } = storeToRefs(preferencesStore)
++const { theme, sourceCode, splitView } = storeToRefs(preferencesStore)
+ const { currentFile: currentTab } = storeToRefs(editorStore)
+ 
+ const isValidMuyaIndexCursor = (cursor: unknown): cursor is MuyaIndexCursorLike => {
+@@ -187,7 +187,7 @@ const handleInvalidateImageCache = () => {
+ }
+ 
+ const handleSelectAll = () => {
+-  if (!sourceCode.value) {
++  if (!sourceCode.value && !splitView.value) {
+     return
+   }
+ 
+@@ -206,7 +206,7 @@ const handleSelectAll = () => {
+ }
+ 
+ const handleUndo = () => {
+-  if (!sourceCode.value) {
++  if (!sourceCode.value && !splitView.value) {
+     return
+   }
+ 
+@@ -216,7 +216,7 @@ const handleUndo = () => {
+ }
+ 
+ const handleRedo = () => {
+-  if (!sourceCode.value) {
++  if (!sourceCode.value && !splitView.value) {
+     return
+   }
+ 
+@@ -417,7 +417,7 @@ onBeforeUnmount(() => {
+ 
+ <style>
+ .source-code {
+-  height: calc(100vh - var(--titleBarHeight));
++  height: 100%;
+   box-sizing: border-box;
+   overflow: auto;
+ }
+diff --git a/packages/desktop/src/renderer/src/components/editorWithTabs/splitView.vue b/packages/desktop/src/renderer/src/components/editorWithTabs/splitView.vue
+new file mode 100644
+index 00000000..a070fd39
+--- /dev/null
++++ b/packages/desktop/src/renderer/src/components/editorWithTabs/splitView.vue
+@@ -0,0 +1,172 @@
++<template>
++  <div
++    ref="splitViewRef"
++    class="split-view"
++  >
++    <div
++      class="split-source"
++      :style="{ width: `${splitRatio * 100}%` }"
++    >
++      <source-code
++        :markdown="markdown"
++        :muya-index-cursor="muyaIndexCursor"
++        :text-direction="textDirection"
++      />
++    </div>
++    <div
++      class="split-divider"
++      @mousedown="handleDividerMouseDown"
++    />
++    <div
++      class="split-preview"
++      :style="{ width: `${(1 - splitRatio) * 100}%` }"
++    >
++      <div class="split-preview-scroll">
++        <!-- eslint-disable-next-line vue/no-v-html -->
++        <div
++          class="split-preview-content"
++          contenteditable="false"
++          v-html="previewHtml"
++        />
++      </div>
++    </div>
++  </div>
++</template>
++
++<script setup lang="ts">
++import { ref, watch, onBeforeUnmount } from 'vue'
++import markdownToHtml from '@/util/markdownToHtml'
++import SourceCode from './sourceCode.vue'
++
++const SOURCE_PREVIEW_DEBOUNCE = 120
++const MIN_PANE_WIDTH = 260
++
++const props = defineProps<{
++  markdown?: string
++  muyaIndexCursor?: unknown
++  textDirection: string
++}>()
++
++const splitViewRef = ref<HTMLDivElement | null>(null)
++const splitRatio = ref(0.5)
++const previewHtml = ref('')
++const previewTimer = ref<ReturnType<typeof setTimeout> | null>(null)
++
++let renderToken = 0
++let isDragging = false
++
++const clampRatio = (ratio: number, width: number): number => {
++  if (!Number.isFinite(width) || width <= MIN_PANE_WIDTH * 2) {
++    return 0.5
++  }
++  const min = MIN_PANE_WIDTH / width
++  const max = 1 - min
++  return Math.min(max, Math.max(min, ratio))
++}
++
++const renderPreview = async (markdown: string): Promise<void> => {
++  const token = ++renderToken
++  const html = await markdownToHtml(markdown)
++  if (token === renderToken) {
++    previewHtml.value = html
++  }
++}
++
++const schedulePreviewRender = (markdown: string): void => {
++  if (previewTimer.value) {
++    clearTimeout(previewTimer.value)
++  }
++  previewTimer.value = setTimeout(() => {
++    previewTimer.value = null
++    renderPreview(markdown)
++  }, SOURCE_PREVIEW_DEBOUNCE)
++}
++
++watch(
++  () => props.markdown,
++  (markdown) => {
++    schedulePreviewRender(markdown ?? '')
++  },
++  { immediate: true }
++)
++
++const handleDividerMouseMove = (event: MouseEvent): void => {
++  if (!isDragging || !splitViewRef.value) {
++    return
++  }
++  const rect = splitViewRef.value.getBoundingClientRect()
++  const ratio = (event.clientX - rect.left) / rect.width
++  splitRatio.value = clampRatio(ratio, rect.width)
++}
++
++const stopDividerDrag = (): void => {
++  if (!isDragging) {
++    return
++  }
++  isDragging = false
++  document.removeEventListener('mousemove', handleDividerMouseMove, false)
++  document.removeEventListener('mouseup', stopDividerDrag, false)
++}
++
++const handleDividerMouseDown = (event: MouseEvent): void => {
++  event.preventDefault()
++  isDragging = true
++  document.addEventListener('mousemove', handleDividerMouseMove, false)
++  document.addEventListener('mouseup', stopDividerDrag, false)
++}
++
++onBeforeUnmount(() => {
++  stopDividerDrag()
++  if (previewTimer.value) {
++    clearTimeout(previewTimer.value)
++    previewTimer.value = null
++  }
++})
++</script>
++
++<style scoped>
++.split-view {
++  height: 100%;
++  display: flex;
++  overflow: hidden;
++}
++
++.split-source,
++.split-preview {
++  height: 100%;
++  min-width: 0;
++  overflow: hidden;
++}
++
++.split-divider {
++  width: 5px;
++  flex: 0 0 5px;
++  cursor: col-resize;
++  border-left: 1px solid var(--itemBgColor);
++  border-right: 1px solid var(--itemBgColor);
++}
++
++.split-preview {
++  background: var(--editorBgColor);
++}
++
++.split-preview-scroll {
++  height: 100%;
++  overflow: auto;
++  padding: 28px 28px 64px;
++  box-sizing: border-box;
++}
++
++.split-preview-content :deep(article.markdown-body) {
++  color: var(--editorColor);
++}
++
++.split-source :deep(.source-code .CodeMirror) {
++  max-width: none;
++  margin: 20px 12px 28px;
++}
++
++.split-source :deep(.source-code .CodeMirror-gutters) {
++  border-right: 1px solid var(--itemBgColor);
++}
++</style>
+diff --git a/packages/desktop/src/renderer/src/pages/app.vue b/packages/desktop/src/renderer/src/pages/app.vue
+index e7ac49ae..6c7dcf6f 100644
+--- a/packages/desktop/src/renderer/src/pages/app.vue
++++ b/packages/desktop/src/renderer/src/pages/app.vue
+@@ -24,6 +24,7 @@
+         :cursor="cursor"
+         :muya-index-cursor="muyaIndexCursor"
+         :source-code="sourceCode"
++        :split-view="splitView"
+         :show-tab-bar="showTabBar"
+         :text-direction="textDirection"
+         :platform="platform"
+@@ -76,7 +77,7 @@ const timer = ref<ReturnType<typeof setTimeout> | null>(null)
+ 
+ const { windowActive, platform, init } = storeToRefs(mainStore)
+ const { showTabBar } = storeToRefs(layoutStore)
+-const { sourceCode, theme, customCss, textDirection, zoom } = storeToRefs(preferencesStore)
++const { sourceCode, splitView, theme, customCss, textDirection, zoom } = storeToRefs(preferencesStore)
+ const { projectTree } = storeToRefs(projectStore)
+ const { currentFile } = storeToRefs(editorStore)
+ 
+diff --git a/packages/desktop/src/renderer/src/store/preferences.ts b/packages/desktop/src/renderer/src/store/preferences.ts
+index 325dfe23..5d727cf2 100644
+--- a/packages/desktop/src/renderer/src/store/preferences.ts
++++ b/packages/desktop/src/renderer/src/store/preferences.ts
+@@ -113,6 +113,7 @@ export interface PreferencesState {
+   typewriter: boolean
+   focus: boolean
+   sourceCode: boolean
++  splitView: boolean
+ 
+   // ----- User config -----
+   imageFolderPath: string
+@@ -133,7 +134,7 @@ interface SetUserDataPayload {
+ }
+ 
+ interface ModeTogglePayload {
+-  type: keyof PreferencesState | 'typewriter' | 'focus' | 'sourceCode'
++  type: keyof PreferencesState | 'typewriter' | 'focus' | 'sourceCode' | 'splitView'
+   checked: boolean
+ }
+ 
+@@ -228,6 +229,7 @@ export const usePreferencesStore = defineStore('preferences', {
+     typewriter: false, // typewriter mode
+     focus: false,
+     sourceCode: false, // source code mode
++    splitView: false,
+ 
+     // user configration
+     imageFolderPath: '',
+@@ -266,9 +268,40 @@ export const usePreferencesStore = defineStore('preferences', {
+       ;(this as unknown as Record<string, unknown>)[type as string] = checked
+     },
+ 
+-    TOGGLE_VIEW_MODE(entryName: keyof PreferencesState | string): void {
++    TOGGLE_VIEW_MODE(entryName: keyof PreferencesState | string): Record<string, boolean> {
+       const target = this as unknown as Record<string, unknown>
+-      target[entryName as string] = !target[entryName as string]
++      const changes: Record<string, boolean> = {}
++
++      switch (entryName) {
++        case 'sourceCode': {
++          const next = !target.sourceCode
++          target.sourceCode = next
++          changes.sourceCode = next as boolean
++          if (next && target.splitView) {
++            target.splitView = false
++            changes.splitView = false
++          }
++          break
++        }
++        case 'splitView': {
++          const next = !target.splitView
++          target.splitView = next
++          changes.splitView = next as boolean
++          if (next && target.sourceCode) {
++            target.sourceCode = false
++            changes.sourceCode = false
++          }
++          break
++        }
++        default: {
++          const name = entryName as string
++          target[name] = !target[name]
++          changes[name] = target[name] as boolean
++          break
++        }
++      }
++
++      return changes
+     },
+ 
+     ASK_FOR_USER_PREFERENCE(): void {
+@@ -310,9 +343,8 @@ export const usePreferencesStore = defineStore('preferences', {
+         bus.emit('show-command-palette')
+       })
+       window.electron.ipcRenderer.on('mt::toggle-view-mode-entry', (_event, entryName) => {
+-        this.TOGGLE_VIEW_MODE(entryName)
+-        const target = this as unknown as Record<string, unknown>
+-        this.DISPATCH_EDITOR_VIEW_STATE({ [entryName]: target[entryName] })
++        const changes = this.TOGGLE_VIEW_MODE(entryName)
++        this.DISPATCH_EDITOR_VIEW_STATE(changes)
+       })
+     },
+ 
+@@ -320,9 +352,8 @@ export const usePreferencesStore = defineStore('preferences', {
+     LISTEN_TOGGLE_VIEW(): void {
+       bus.on('view:toggle-view-entry', (entryName) => {
+         const name = entryName as string
+-        this.TOGGLE_VIEW_MODE(name)
+-        const target = this as unknown as Record<string, unknown>
+-        this.DISPATCH_EDITOR_VIEW_STATE({ [name]: target[name] })
++        const changes = this.TOGGLE_VIEW_MODE(name)
++        this.DISPATCH_EDITOR_VIEW_STATE(changes)
+       })
+     },
+ 
+diff --git a/packages/desktop/static/locales/en.json b/packages/desktop/static/locales/en.json
+index e56f6163..b692a6b2 100644
+--- a/packages/desktop/static/locales/en.json
++++ b/packages/desktop/static/locales/en.json
+@@ -113,6 +113,7 @@
+       "toggleSidebar": "Toggle Sidebar",
+       "toggleTabbar": "Toggle Tabbar",
+       "commandPalette": "Command Palette",
++      "splitViewMode": "Split View Mode",
+       "sourceCodeMode": "Source Code Mode",
+       "typewriterMode": "Typewriter Mode",
+       "focusMode": "Focus Mode",
+@@ -831,9 +832,11 @@
+     },
+     "view": {
+       "commandPalette": "Command Palette",
++      "splitViewMode": "Split View Mode",
+       "sourceCodeMode": "Source Code Mode",
+       "typewriterMode": "Typewriter Mode",
+       "focusMode": "Focus Mode",
++      "toggleSplitViewMode": "Toggle Split View Mode",
+       "toggleSourceCodeMode": "Toggle Source Code Mode",
+       "toggleTypewriterMode": "Toggle Typewriter Mode",
+       "toggleFocusMode": "Toggle Focus Mode",
